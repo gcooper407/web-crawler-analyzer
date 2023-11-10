@@ -2,6 +2,9 @@
 
 import argparse
 import socket
+import ssl
+from html.parser import HTMLParser
+from urllib.parse import urlparse
 
 DEFAULT_SERVER = "proj5.3700.network"
 DEFAULT_PORT = 443
@@ -12,18 +15,104 @@ class Crawler:
         self.port = args.port
         self.username = args.username
         self.password = args.password
+        self.csrf_token = None
+        self.session_id = None
+        self.socket = None
+
+    def init_connection(self):
+        # creating + wrapping the socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_default_certs()
+        mysocket = context.wrap_socket(sock, server_hostname=self.server)
+        # establishing socket connection with server
+        mysocket.connect((self.server, self.port))
+        
+        self.socket = mysocket
+        
+
+    def login(self):
+        # GET the login page
+        request = "GET /accounts/login/?next=/fakebook/ HTTP/1.0\r\nHost: www.3700.network\r\n\r\n"
+        response = self.send_request(request)
+        self.get_cookies(response)
+
+        # enter login credentials
+        login_credentials = f"username={self.username}&password={self.password}&csrfmiddlewaretoken={self.csrf_token}&next=/fakebook/"
+        login_cred_length = len(login_credentials)
+
+        # POST the login information
+        request = f"POST /accounts/login/ HTTP/1.0\r\nHost: www.3700.network\r\nContent-Type: application/x-www-form-urlencoded\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\nContent-Length: {login_cred_length}\r\n\r\n{login_credentials}"
+        response = self.send_request(request)
+        self.get_cookies(response)
+
+        return response
+        
+
+    def get_cookies(self, response):
+        print(response)
+
+        # obtaining the csrf token
+        [csrf_cookie] = list(filter(lambda x: x.startswith("csrftoken="), response["cookies"]))
+        self.csrf_token = csrf_cookie.split("; ")[0].split("=")[1]
+
+        # obtaining the session id
+        [session_id_cookie] = list(filter(lambda x: x.startswith("sessionid="), response["cookies"]))
+        self.session_id = session_id_cookie.split("; ")[0].split("=")[1]
+		
+		
+    def send_request(self, request):
+        self.init_connection()
+
+        self.socket.send(request.encode('ascii'))
+
+        # receiving data
+        response = b''
+        while True:
+            data = self.socket.recv(100)
+            if len(data) == 0:
+                break
+            else:
+                response += data
+        print("Response:\n%s" % response.decode('ascii'))
+        response_data = response.decode('utf-8')
+
+        self.socket.close()
+
+        return self.parse_http_response(response_data)
+    
+    def parse_http_response(self, response_data):
+        # Remove trailing whitespace and isolate the respone (separate it from HTML content)
+        data = response_data.strip().split("\r\n\r\n")
+
+        response = {}
+        headers = data[0].split("\r\n")
+
+        # extracts status code
+        response["status_code"] = int(headers[0].split(" ")[1])
+
+        response["header_fields"] = {}
+        response["cookies"] = []
+        for header in headers[1:]:
+            (field, content) = header.split(": ")
+            if field == "set-cookie":
+                response["cookies"].append(content)
+            else:
+                response["header_fields"][field] = content
+
+        response["body"] = data[-1] if data else None
+
+        return response
 
     def run(self):
-        request = "GET / HTTP/1.0\r\n\r\n"
+        response = self.login()
 
-        print("Request to %s:%d" % (self.server, self.port))
-        print(request)
-        mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        mysocket.connect((self.server, self.port))
-        mysocket.send(request.encode('ascii'))
+        request = f"GET {response['header_fields']['location']} HTTP/1.0\r\nHost: www.3700.network\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
+        response = self.send_request(request)
 
-        data = mysocket.recv(1000)
-        print("Response:\n%s" % data.decode('ascii'))
+        
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='crawl Fakebook')
@@ -34,4 +123,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     sender = Crawler(args)
     sender.run()
-    #test 
