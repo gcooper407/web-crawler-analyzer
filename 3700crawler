@@ -5,9 +5,32 @@ import socket
 import ssl
 from html.parser import HTMLParser
 from urllib.parse import urlparse
+import sys
 
-DEFAULT_SERVER = "proj5.3700.network"
+DEFAULT_SERVER = "www.3700.network"
 DEFAULT_PORT = 443
+
+visited_links = []
+link_set = set({}) # set
+flags = []
+
+class MyHTMLParser(HTMLParser):
+    def handle_starttag(self, tag, attrs):
+        if (tag == 'a'):
+            link = attrs[0][1]
+            if (link not in visited_links and link.startswith('/fakebook/')):
+                link_set.add(attrs[0][1])   # if a duplicate link is added, it does not get added to the set
+
+    def handle_endtag(self, tag):
+        # print("Encountered an end tag :", tag)
+        pass
+
+    def handle_data(self, data):
+        # print("Encountered some data  :", data)
+        if (data.startswith("FLAG:")):
+            flags.append(data)
+            print("We found a flag!")
+            print(data)
 
 class Crawler:
     def __init__(self, args):
@@ -50,7 +73,7 @@ class Crawler:
         
 
     def get_cookies(self, response):
-        print(response)
+        # print(response)
 
         # obtaining the csrf token
         [csrf_cookie] = list(filter(lambda x: x.startswith("csrftoken="), response["cookies"]))
@@ -74,7 +97,7 @@ class Crawler:
                 break
             else:
                 response += data
-        print("Response:\n%s" % response.decode('ascii'))
+        # print("Response:\n%s" % response.decode('ascii'))
         response_data = response.decode('utf-8')
 
         self.socket.close()
@@ -103,12 +126,41 @@ class Crawler:
         response["body"] = data[-1] if data else None
 
         return response
+    
+    def scrape_page(q):
+        pass
 
     def run(self):
         response = self.login()
 
         request = f"GET {response['header_fields']['location']} HTTP/1.0\r\nHost: www.3700.network\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
         response = self.send_request(request)
+
+        parser = MyHTMLParser()
+        parser.feed(response["body"])
+
+        # some_links = list(filter(lambda x: x.startswith("/fakebook/"), link_queue))
+
+        # print(link_queue)
+
+        while (len(link_set) > 0 and len(flags) < 1):
+            current_link = link_set.pop()
+            visited_links.append(current_link)
+            request = f'GET {current_link} HTTP/1.0\r\nHost: {DEFAULT_SERVER}\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n'
+            # print("Request: %s" % request)
+            response = self.send_request(request)
+
+            parser.feed(response["body"])
+            print(("# Links Visited: %s" % len(visited_links)).ljust(30, " ") + 
+                  ("# Links To Visit: %s" % len(link_set)).ljust(30, " ") + 
+                  ("Visiting: %s" % current_link))
+
+        for flag in flags:
+            sys.stdout.write(flag.replace("FLAG: ", ""))
+        # print(flags)
+
+
+
 
         
 
