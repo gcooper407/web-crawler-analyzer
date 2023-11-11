@@ -4,7 +4,6 @@ import argparse
 import socket
 import ssl
 from html.parser import HTMLParser
-from urllib.parse import urlparse
 import sys
 
 DEFAULT_SERVER = "www.3700.network"
@@ -56,7 +55,7 @@ class Crawler:
 
     def login(self):
         # GET the login page
-        request = "GET /accounts/login/?next=/fakebook/ HTTP/1.0\r\nHost: www.3700.network\r\n\r\n"
+        request = "GET /accounts/login/?next=/fakebook/ HTTP/1.1\r\nHost: www.3700.network\r\n\r\n"
         response = self.send_request(request)
         self.get_cookies(response)
 
@@ -65,7 +64,7 @@ class Crawler:
         login_cred_length = len(login_credentials)
 
         # POST the login information
-        request = f"POST /accounts/login/ HTTP/1.0\r\nHost: www.3700.network\r\nContent-Type: application/x-www-form-urlencoded\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\nContent-Length: {login_cred_length}\r\n\r\n{login_credentials}"
+        request = f"POST /accounts/login/ HTTP/1.1\r\nHost: www.3700.network\r\nContent-Type: application/x-www-form-urlencoded\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\nContent-Length: {login_cred_length}\r\n\r\n{login_credentials}"
         response = self.send_request(request)
         self.get_cookies(response)
 
@@ -90,13 +89,7 @@ class Crawler:
         self.socket.send(request.encode('ascii'))
 
         # receiving data
-        response = b''
-        while True:
-            data = self.socket.recv(100)
-            if len(data) == 0:
-                break
-            else:
-                response += data
+        response = self.socket.recv(100000)
         # print("Response:\n%s" % response.decode('ascii'))
         response_data = response.decode('utf-8')
 
@@ -126,14 +119,11 @@ class Crawler:
         response["body"] = data[-1] if data else None
 
         return response
-    
-    def scrape_page(q):
-        pass
 
     def run(self):
         response = self.login()
 
-        request = f"GET {response['header_fields']['location']} HTTP/1.0\r\nHost: www.3700.network\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
+        request = f"GET {response['header_fields']['location']} HTTP/1.1\r\nHost: www.3700.network\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
         response = self.send_request(request)
 
         parser = MyHTMLParser()
@@ -143,17 +133,29 @@ class Crawler:
 
         # print(link_queue)
 
-        while (len(link_set) > 0 and len(flags) < 1):
+        while (len(link_set) > 0 and len(flags) < 5):
             current_link = link_set.pop()
-            visited_links.append(current_link)
-            request = f'GET {current_link} HTTP/1.0\r\nHost: {DEFAULT_SERVER}\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n'
+            
+            request = f"GET {current_link} HTTP/1.1\r\nHost: {DEFAULT_SERVER}\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
             # print("Request: %s" % request)
             response = self.send_request(request)
+            visited_links.append(current_link)
 
-            parser.feed(response["body"])
-            print(("# Links Visited: %s" % len(visited_links)).ljust(30, " ") + 
-                  ("# Links To Visit: %s" % len(link_set)).ljust(30, " ") + 
-                  ("Visiting: %s" % current_link))
+
+
+            if (response["status_code"] == 200):
+                parser.feed(response["body"])
+                print(("# Links Visited: %s" % len(visited_links)).ljust(30, " ") + 
+                    ("# Links To Visit: %s" % len(link_set)).ljust(30, " ") + 
+                    ("Visiting: %s" % current_link))
+            elif (response["status_code"] == 302):
+                link_set.add(response["header_fields"]["location"])
+            elif (response["status_code"] == 403 or response["status_code"] == 404):
+                pass
+            elif (response["status_code"] == 503 or response["status_code"] == 504):
+                link_set.add(current_link)
+            else:
+                raise Exception(f"Unrecognized status code: {response} caused by request {request}")
 
         for flag in flags:
             sys.stdout.write(flag.replace("FLAG: ", ""))
