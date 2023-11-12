@@ -16,17 +16,35 @@ flags = []
 
 class MyHTMLParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
+        """
+
+        :param tag:
+        :param attrs:
+        :return:
+        """
+
         if (tag == 'a'):
             for key, value in attrs:
                 if key == "href" and value is not None and value not in visited_links and '/fakebook/' in value:
                     link_set.add(value) # if a duplicate link is added, it does not get added to the set  
 
     def handle_data(self, data):
+        """
+
+        :param data:
+        :return:
+        """
+
         if (data.startswith("FLAG:")):
             flags.append(data)
 
 class Crawler:
     def __init__(self, args):
+        """
+
+        :param args:
+        """
+        
         self.server = args.server
         self.port = args.port
         self.username = args.username
@@ -36,6 +54,11 @@ class Crawler:
         self.socket = None
 
     def init_connection(self):
+        """
+
+        :return:
+        """
+        
         # creating + wrapping the socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -48,6 +71,11 @@ class Crawler:
         
 
     def login(self):
+        """
+
+        :return:
+        """
+        
         # GET the login page
         request = f"GET /accounts/login/?next=/fakebook/ HTTP/{HTTP_VERSION}\r\nHost: {self.server}\r\n\r\n"
         response = self.send_request(request)
@@ -66,6 +94,12 @@ class Crawler:
         
 
     def get_cookies(self, response):
+        """
+
+        :param response:
+        :return:
+        """
+        
         # obtaining the csrf token
         [csrf_cookie] = list(filter(lambda x: x.startswith("csrftoken="), response["cookies"]))
         self.csrf_token = csrf_cookie.split("; ")[0].split("=")[1]
@@ -74,8 +108,13 @@ class Crawler:
         [session_id_cookie] = list(filter(lambda x: x.startswith("sessionid="), response["cookies"]))
         self.session_id = session_id_cookie.split("; ")[0].split("=")[1]
 		
-		
     def send_request(self, request):
+        """
+
+        :param request:
+        :return:
+        """
+        
         self.init_connection()
 
         self.socket.send(request.encode('ascii'))
@@ -89,6 +128,12 @@ class Crawler:
         return self.parse_http_response(response_data)
     
     def parse_http_response(self, response_data):
+        """
+
+        :param response_data:
+        :return:
+        """
+        
         # Remove trailing whitespace and isolate the respone (separate it from HTML content)
         data = response_data.strip().split("\r\n\r\n")
 
@@ -127,6 +172,11 @@ class Crawler:
         return response
 
     def run(self):
+        """
+
+        :return:
+        """
+        
         response = self.login()
 
         request = f"GET {response['header_fields']['location']} HTTP/{HTTP_VERSION}\r\nHost: www.3700.network\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
@@ -167,6 +217,14 @@ class Crawler:
             # sys.stdout.write(flag.replace("FLAG: ", ""), "\n")
     
     def get_request(self, link, csrf=None, session_id=None):
+        """
+
+        :param link:
+        :param csrf:
+        :param session_id:
+        :return:
+        """
+        
         link = urlparse(link)
 
         request = "GET "
