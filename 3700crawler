@@ -4,10 +4,11 @@ import argparse
 import socket
 import ssl
 from html.parser import HTMLParser
-import sys
+from urllib.parse import urlparse
 
 DEFAULT_SERVER = "www.3700.network"
 DEFAULT_PORT = 443
+HTTP_VERSION = "1.1"
 
 visited_links = []
 link_set = set({}) # set
@@ -16,20 +17,13 @@ flags = []
 class MyHTMLParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if (tag == 'a'):
-            link = attrs[0][1]
-            if (link not in visited_links and link.startswith('/fakebook/')):
-                link_set.add(attrs[0][1])   # if a duplicate link is added, it does not get added to the set
-
-    def handle_endtag(self, tag):
-        # print("Encountered an end tag :", tag)
-        pass
+            for key, value in attrs:
+                if key == "href" and value is not None and value not in visited_links and '/fakebook/' in value:
+                    link_set.add(value) # if a duplicate link is added, it does not get added to the set  
 
     def handle_data(self, data):
-        # print("Encountered some data  :", data)
         if (data.startswith("FLAG:")):
             flags.append(data)
-            print("We found a flag!")
-            print(data)
 
 class Crawler:
     def __init__(self, args):
@@ -55,7 +49,7 @@ class Crawler:
 
     def login(self):
         # GET the login page
-        request = "GET /accounts/login/?next=/fakebook/ HTTP/1.1\r\nHost: www.3700.network\r\n\r\n"
+        request = f"GET /accounts/login/?next=/fakebook/ HTTP/{HTTP_VERSION}\r\nHost: {self.server}\r\n\r\n"
         response = self.send_request(request)
         self.get_cookies(response)
 
@@ -64,7 +58,7 @@ class Crawler:
         login_cred_length = len(login_credentials)
 
         # POST the login information
-        request = f"POST /accounts/login/ HTTP/1.1\r\nHost: www.3700.network\r\nContent-Type: application/x-www-form-urlencoded\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\nContent-Length: {login_cred_length}\r\n\r\n{login_credentials}"
+        request = f"POST /accounts/login/ HTTP/{HTTP_VERSION}\r\nHost: {self.server}\r\nContent-Type: application/x-www-form-urlencoded\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\nContent-Length: {login_cred_length}\r\n\r\n{login_credentials}"
         response = self.send_request(request)
         self.get_cookies(response)
 
@@ -72,8 +66,6 @@ class Crawler:
         
 
     def get_cookies(self, response):
-        # print(response)
-
         # obtaining the csrf token
         [csrf_cookie] = list(filter(lambda x: x.startswith("csrftoken="), response["cookies"]))
         self.csrf_token = csrf_cookie.split("; ")[0].split("=")[1]
@@ -90,7 +82,6 @@ class Crawler:
 
         # receiving data
         response = self.socket.recv(100000)
-        # print("Response:\n%s" % response.decode('ascii'))
         response_data = response.decode('utf-8')
 
         self.socket.close()
@@ -116,6 +107,21 @@ class Crawler:
             else:
                 response["header_fields"][field] = content
 
+        # if "Transfer-Encoding" in response["header_fields"].keys():
+        #     if (response["header_fields"]["Transfer-Encoding"] == "chunked"):
+        #         # print("---------------------\n\nEncountered Chunked Encoding\n\n---------------------")
+        #         body_tmp = data[-1].strip().split("\r\n")
+
+        #         body = ""
+        #         for n in range(len(body_tmp)):
+        #             if n % 2 == 0:
+        #                 if body_tmp[n] == "0":
+        #                     break
+        #                 else:
+        #                     pass
+        #             else:
+        #                 body += body_tmp[n]
+        # else:
         response["body"] = data[-1] if data else None
 
         return response
@@ -123,20 +129,19 @@ class Crawler:
     def run(self):
         response = self.login()
 
-        request = f"GET {response['header_fields']['location']} HTTP/1.1\r\nHost: www.3700.network\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
+        request = f"GET {response['header_fields']['location']} HTTP/{HTTP_VERSION}\r\nHost: www.3700.network\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
         response = self.send_request(request)
 
         parser = MyHTMLParser()
         parser.feed(response["body"])
 
-        # some_links = list(filter(lambda x: x.startswith("/fakebook/"), link_queue))
-
-        # print(link_queue)
-
         while (len(link_set) > 0 and len(flags) < 5):
             current_link = link_set.pop()
             
-            request = f"GET {current_link} HTTP/1.1\r\nHost: {DEFAULT_SERVER}\r\nCookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n"
+            request = self.get_request(link=current_link, csrf=self.csrf_token, session_id=self.session_id)
+            # print("------------------------")
+            # print(request)
+            # print("------------------------")
             # print("Request: %s" % request)
             response = self.send_request(request)
             visited_links.append(current_link)
@@ -145,27 +150,36 @@ class Crawler:
 
             if (response["status_code"] == 200):
                 parser.feed(response["body"])
-                print(("# Links Visited: %s" % len(visited_links)).ljust(30, " ") + 
-                    ("# Links To Visit: %s" % len(link_set)).ljust(30, " ") + 
-                    ("Visiting: %s" % current_link))
+                # print(("# Links Visited: %s" % len(visited_links)).ljust(30, " ") + 
+                #     ("# Links To Visit: %s" % len(link_set)).ljust(30, " ") + 
+                #     ("Visiting: %s" % current_link))
             elif (response["status_code"] == 302):
                 link_set.add(response["header_fields"]["location"])
-            elif (response["status_code"] == 403 or response["status_code"] == 404):
+            elif (response["status_code"] in (400, 403, 404)):
                 pass
-            elif (response["status_code"] == 503 or response["status_code"] == 504):
+            elif (response["status_code"] == 503):
                 link_set.add(current_link)
             else:
                 raise Exception(f"Unrecognized status code: {response} caused by request {request}")
 
         for flag in flags:
-            sys.stdout.write(flag.replace("FLAG: ", ""))
-        # print(flags)
+            print(flag.replace("FLAG: ", ""), "\n")
+            # sys.stdout.write(flag.replace("FLAG: ", ""), "\n")
+    
+    def get_request(self, link, csrf=None, session_id=None):
+        link = urlparse(link)
 
+        request = "GET "
+        request += f"{link.path} "
+        request += f"HTTP/{HTTP_VERSION}\r\n"
+        request += f"HOST: {self.server}\r\n"
 
+        if csrf != None and session_id != None:
+            request += f"Cookie: csrftoken={csrf}; "
+            request += f"sessionid={session_id}\r\n"
 
-
-        
-
+        request += "\r\n"
+        return request
 
 
 if __name__ == "__main__":
