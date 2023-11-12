@@ -220,8 +220,7 @@ class Crawler:
                 raise Exception(f"Unrecognized status code: {response['status_code']}")
 
         for flag in flags:
-            print(flag.replace("FLAG: ", ""), "\n")
-            # sys.stdout.write(flag.replace("FLAG: ", ""), "\n")
+            print(flag.replace("FLAG: ", ""))
 
     def get_request(self, link, csrf=None, session_id=None):
         """
