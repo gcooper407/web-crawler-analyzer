@@ -10,32 +10,36 @@ DEFAULT_SERVER = "www.3700.network"
 DEFAULT_PORT = 443
 HTTP_VERSION = "1.1"
 
-visited_links = []
-link_set = set({})  # set
+visited_links = set()
+link_set = set()  # set
 flags = []
-
 
 class MyHTMLParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         """
+        Processes the start tag of an HTML element, saving any new Fakebook links encountered
 
-        :param tag:
-        :param attrs:
-        :return:
+        :param tag: the string of the opening tag of an HTML element
+        :param attrs: the attributes of the tag, a list of pairs (key, value)
+        :return: None
         """
 
+        # looks for links (in 'a' tag) and saves those that link to a new fakebook page
         if tag == 'a':
             for key, value in attrs:
-                if (key == "href" and value is not None and
-                        value not in visited_links and '/fakebook/' in value):
+                if (key == "href" and value is not None and value not in visited_links
+                    and '/fakebook/' in value and "\n" not in value):
                     link_set.add(value)
 
     def handle_data(self, data):
         """
-        :param data:
-        :return:
+        Handles the data between HTML tags, saving any flags encountered
+
+        :param data: the string data (text/content) inside an HTML tag
+        :return" None
         """
 
+        # looks for flags and saves any that are found
         if data.startswith("FLAG:"):
             flags.append(data)
 
@@ -43,8 +47,9 @@ class MyHTMLParser(HTMLParser):
 class Crawler:
     def __init__(self, args):
         """
+        Initializes the web crawler using the command line arguments
 
-        :param args:
+        :param args: command line arguments (or default values for any not explicitly provided)
         """
 
         self.server = args.server
@@ -57,11 +62,12 @@ class Crawler:
 
     def init_connection(self):
         """
+        Initializes a TCP socket connection (wrapped in TLS) with the server
 
-        :return:
+        :return: None
         """
 
-        # creating + wrapping the socket
+        # creating + wrapping the socket in TLS
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.load_default_certs()
@@ -73,26 +79,31 @@ class Crawler:
 
     def login(self):
         """
+        Logs in to the Fakebook page using the user's specified credentials
+        (and updates cookies as necessary)
 
-        :return:
+        :return: the response from the server after successfully logging into Fakebook
         """
+        self.init_connection()
 
-        # GET the login page
-        request = (f"GET /accounts/login/?next=/fakebook/ HTTP/{HTTP_VERSION}\r\n" +
-                   f"Host: {self.server}\r\n\r\n")
+        # GET the login page and store serverv response (and update cookies)
+        request = self.get("/accounts/login/?next=/fakebook/")
+        # print("SENDING LOGIN GET\n")
         response = self.send_request(request)
         self.get_cookies(response)
 
-        # enter login credentials
+        # format message with login credentials
         login_credentials = (f"username={self.username}&password={self.password}" +
                              f"&csrfmiddlewaretoken={self.csrf_token}&next=/fakebook/")
         login_cred_length = len(login_credentials)
 
-        # POST the login information
+        # POST the login information and store server response (and update cookies)
         request = (f"POST /accounts/login/ HTTP/{HTTP_VERSION}\r\n" +
                    f"Host: {self.server}\r\nContent-Type: application/x-www-form-urlencoded\r\n" +
                    f"Cookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n" +
+                   "Connection: Keep-Alive\r\n" +
                    f"Content-Length: {login_cred_length}\r\n\r\n{login_credentials}")
+        # print("SENDING LOGIN POST\n")
         response = self.send_request(request)
         self.get_cookies(response)
 
@@ -100,9 +111,10 @@ class Crawler:
 
     def get_cookies(self, response):
         """
+        Updates the cookies based on those found in the server response
 
-        :param response:
-        :return:
+        :param response: the response from the server after a request
+        :return: None
         """
 
         # obtaining the csrf token
@@ -116,41 +128,60 @@ class Crawler:
 
     def send_request(self, request):
         """
+        Sends the given request to the server
 
-        :param request:
-        :return:
+        :param request: string request to be sent to the server (GET or POST)
+        :return: the HTTP-parsed response from the server
         """
 
-        self.init_connection()
+        try:
+            # send the request to the server
+            self.socket.send(request.encode('utf-8'))
 
-        self.socket.send(request.encode('ascii'))
+            # receive the response data
+            # NOTE: receiving data in a while loops fails here, as the server may close the
+            # socket connection as soon as it sends the last piece of data, leaving the socket
+            # stuck in the while loop (break condition never met)
+            response = self.socket.recv(100000)
+            response_data = response.decode()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            print("ERROR HIT -- SERVER CLOSED CONNECTION\n\n")
+            self.init_connection()
+            return self.send_request(request)
 
-        # receiving data
-        response = self.socket.recv(100000)
-        response_data = response.decode('utf-8')
-
-        self.socket.close()
-
+        
+        
+        # parse and return the HTTP response
         return self.parse_http_response(response_data)
 
     def parse_http_response(self, response_data):
         """
+        Parses the HTTP response from the server, storing the response as a mapping from 
+        response element to the content of the respective element 
+        (e.g. status_code: 200, body: [response body content], etc.))
 
-        :param response_data:
-        :return:
+        :param response_data: the raw string response from the server
+        :return: the HTTP-parsed response from the server, stored as a mapping
         """
 
         # Remove trailing whitespace and isolate the response (separate it from HTML content)
         data = response_data.strip().split("\r\n\r\n")
 
         response = {}
+
+        print(data)
+
+        # isolate the headers of the response
         headers = data[0].split("\r\n")
 
-        # extracts status code
+        # extract and store the status code
         response["status_code"] = int(headers[0].split(" ")[1])
 
         response["header_fields"] = {}
         response["cookies"] = []
+        
+        # for each header, if the header specifies new cookies, add them to the list of cookies;
+        # otherwise map the header to its value
         for header in headers[1:]:
             (field, content) = header.split(": ")
             if field == "set-cookie":
@@ -158,81 +189,36 @@ class Crawler:
             else:
                 response["header_fields"][field] = content
 
-        if "Transfer-Encoding" in response["header_fields"].keys():
-            if response["header_fields"]["Transfer-Encoding"] == "chunked":
-                # print("----------------\n\nEncountered Chunked Encoding\n\n---------------")
-                body_tmp = data[-1].strip().split("\r\n")
+        # extract the body (the HTML content), which is the last element in the response
+        response["body"] = data[-1] if len(data) > 1 else None
 
-                body = ""
-                for n in range(len(body_tmp)):
-                    if n % 2 == 0:
-                        if body_tmp[n] == "0":
-                            break
-                        else:
-                            pass
-                    else:
-                        body += body_tmp[n]
-        else:
-            response["body"] = data[-1] if data else None
+        # print(int(response["header_fields"]["content-length"]), "\n")
+        # print(len(response["body"]), "\n")
+
+        # while int(response["header_fields"]["content-length"]) != len(response["body"]) + 1:
+        #     self.init_connection()
+        #     response = self.socket.recv(100000)
+        #     response["body"] += response.decode()
+
+
+        # print(response)
 
         return response
+    
+    def get(self, link, csrf=None, session_id=None):
+        """
+        Format a GET request with the given link, csrf, and session id
 
-    def run(self):
+        :param link: link from which to retrieve page information
+        :param csrf: csrf token, or None if not provided
+        :param session_id: session id token, or None if not provided
+        :return: a string containing a properly-formatted GET request
         """
 
-        :return:
-        """
-
-        response = self.login()
-
-        request = (f"GET {response['header_fields']['location']} HTTP/{HTTP_VERSION}\r\n" +
-                   "Host: www.3700.network\r\n" +
-                   f"Cookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n")
-        response = self.send_request(request)
-
-        html_parser = MyHTMLParser()
-        html_parser.feed(response["body"])
-
-        while len(link_set) > 0 and len(flags) < 5:
-            current_link = link_set.pop()
-
-            request = self.get_request(link=current_link, csrf=self.csrf_token,
-                                       session_id=self.session_id)
-            # print("------------------------")
-            # print(request)
-            # print("------------------------")
-            # print("Request: %s" % request)
-            response = self.send_request(request)
-            visited_links.append(current_link)
-
-            if response["status_code"] == 200:
-                html_parser.feed(response["body"])
-                # print(("# Links Visited: %s" % len(visited_links)).ljust(30, " ") +
-                #     ("# Links To Visit: %s" % len(link_set)).ljust(30, " ") +
-                #     ("Visiting: %s" % current_link))
-            elif response["status_code"] == 302:
-                link_set.add(response["header_fields"]["location"])
-            elif response["status_code"] in (400, 403, 404):
-                pass
-            elif response["status_code"] == 503:
-                link_set.add(current_link)
-            else:
-                raise Exception(f"Unrecognized status code: {response['status_code']}")
-
-        for flag in flags:
-            print(flag.replace("FLAG: ", ""))
-
-    def get_request(self, link, csrf=None, session_id=None):
-        """
-
-        :param link:
-        :param csrf:
-        :param session_id:
-        :return:
-        """
-
+        # parse the url into its components
         link = urlparse(link)
 
+        # form the GET request using the url path, HTTP version, server, and token(s)
         request = "GET "
         request += f"{link.path} "
         request += f"HTTP/{HTTP_VERSION}\r\n"
@@ -242,8 +228,70 @@ class Crawler:
             request += f"Cookie: csrftoken={csrf}; "
             request += f"sessionid={session_id}\r\n"
 
+        request += "Connection: Keep-Alive\r\n"
+
         request += "\r\n"
         return request
+
+    def run(self):
+        """
+        Crawls the Fakebook website and prints out all 5 flags found
+
+        :return: None
+        """
+
+        # logs into Fakebook and redirects to the specified page
+        response = self.login()
+        request = (f"GET {response['header_fields']['location']} HTTP/{HTTP_VERSION}\r\n" +
+                   "Host: www.3700.network\r\n" +
+                   f"Cookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n")
+        response = self.send_request(request)
+
+        # parses the HTML of the page
+        html_parser = MyHTMLParser()
+        html_parser.feed(response["body"])
+
+        # while the crawler hasn't yet crawled all the pages NOR found all 5 flags, keep crawling
+        while len(link_set) > 0 and len(flags) < 5:
+            # get the next link from the frontier (uncrawled links)
+            current_link = link_set.pop()
+
+            # send a GET request to obtain the HTML page of the link, store the server reponse,
+            # and add the link to the list of already-visited links
+            request = self.get(current_link, self.csrf_token, self.session_id)
+            # print("------------------------")
+            # print(request)
+            # print("------------------------")
+            # print("Request: %s" % request)
+            response = self.send_request(request)
+            visited_links.add(current_link)
+
+            # handle the message based on the status code
+            # if response is 200 -- "OK", then parse the page HTML
+            if response["status_code"] == 200:
+                html_parser.feed(response["body"])
+                print(f"# Links Visited: {len(visited_links)}".ljust(30, " ") +
+                      f"# Links To Visit: {len(link_set)}".ljust(30, " ") +
+                      f"Visiting: {current_link}")
+            # if response is 302 - "Found", redirect to the specified URL (add the specified URL
+            # to the frontier (if not already seen))
+            elif response["status_code"] == 302:
+                url = response["header_fields"]["location"]
+                if url not in visited_links:
+                    link_set.add(url)
+            # if response is 403 -- "Forbidden" or 404 -- "Not Found", ignore the current link
+            elif response["status_code"] in (403, 404):
+                pass
+            # if response is 503 -- "Service Unavailable", retry the link
+            elif response["status_code"] == 503:
+                link_set.add(current_link)
+            # otherwise, we have an unrecognized status code
+            else:
+                raise Exception(f"Unrecognized status code: {response['status_code']}")
+
+        # print all flags found
+        for flag in flags:
+            print(flag.replace("FLAG: ", ""))
 
 
 if __name__ == "__main__":
