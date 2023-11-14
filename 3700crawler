@@ -11,7 +11,7 @@ DEFAULT_PORT = 443
 HTTP_VERSION = "1.1"
 
 visited_links = set()
-link_set = set()  # set
+link_frontier = set()
 flags = []
 
 class MyHTMLParser(HTMLParser):
@@ -27,9 +27,10 @@ class MyHTMLParser(HTMLParser):
         # looks for links (in 'a' tag) and saves those that link to a new fakebook page
         if tag == 'a':
             for key, value in attrs:
-                if (key == "href" and value is not None and value not in visited_links
+                if (key == "href" and value is not None 
+                    and value not in visited_links
                     and '/fakebook/' in value and "\n" not in value):
-                    link_set.add(value)
+                    link_frontier.add(value)
 
     def handle_data(self, data):
         """
@@ -42,6 +43,7 @@ class MyHTMLParser(HTMLParser):
         # looks for flags and saves any that are found
         if data.startswith("FLAG:"):
             flags.append(data)
+            print(f"******************** FOUND {data} ********************")
 
 
 class Crawler:
@@ -75,6 +77,7 @@ class Crawler:
         # establishing socket connection with server
         mysocket.connect((self.server, self.port))
 
+        # store the socket
         self.socket = mysocket
 
     def login(self):
@@ -84,6 +87,8 @@ class Crawler:
 
         :return: the response from the server after successfully logging into Fakebook
         """
+
+        # initialize connection with the server
         self.init_connection()
 
         # GET the login page and store serverv response (and update cookies)
@@ -134,33 +139,30 @@ class Crawler:
         :return: the HTTP-parsed response from the server
         """
 
-        try:
-            # send the request to the server
-            self.socket.send(request.encode('utf-8'))
+        # send the request to the server
+        self.socket.send(request.encode('utf-8'))
 
-            # receive the response data
-            # NOTE: receiving data in a while loops fails here, as the server may close the
-            # socket connection as soon as it sends the last piece of data, leaving the socket
-            # stuck in the while loop (break condition never met)
-            response = self.socket.recv(100000)
-            response_data = response.decode()
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            print("ERROR HIT -- SERVER CLOSED CONNECTION\n\n")
-            self.init_connection()
-            return self.send_request(request)
+        # receive the response data
+        # NOTE: receiving data in a while loops fails here, as the server may close the
+        # socket connection as soon as it sends the last piece of data, leaving the socket
+        # stuck in the while loop (break condition never met)
+        response = self.socket.recv(4096)
+        response_data = response.decode()
 
         
         
         # parse and return the HTTP response
-        return self.parse_http_response(response_data)
+        return self.parse_http_response(response_data, request)
 
-    def parse_http_response(self, response_data):
+    def parse_http_response(self, response_data, request):
         """
         Parses the HTTP response from the server, storing the response as a mapping from 
         response element to the content of the respective element 
         (e.g. status_code: 200, body: [response body content], etc.))
 
         :param response_data: the raw string response from the server
+        :param request: string request sent to the server (GET or POST) in case a re-request 
+        is necessary
         :return: the HTTP-parsed response from the server, stored as a mapping
         """
 
@@ -169,37 +171,39 @@ class Crawler:
 
         response = {}
 
-        print(data)
-
         # isolate the headers of the response
         headers = data[0].split("\r\n")
 
-        # extract and store the status code
-        response["status_code"] = int(headers[0].split(" ")[1])
+        try:
+            # extract and store the status code
+            response["status_code"] = int(headers[0].split(" ")[1])
 
-        response["header_fields"] = {}
-        response["cookies"] = []
-        
-        # for each header, if the header specifies new cookies, add them to the list of cookies;
-        # otherwise map the header to its value
-        for header in headers[1:]:
-            (field, content) = header.split(": ")
-            if field == "set-cookie":
-                response["cookies"].append(content)
-            else:
-                response["header_fields"][field] = content
+            response["header_fields"] = {}
+            response["cookies"] = []
+            
+            # for each header, if the header specifies new cookies, add them to the list of cookies;
+            # otherwise map the header to its value
+            for header in headers[1:]:
+                (field, content) = header.split(": ")
+                if field == "set-cookie":
+                    response["cookies"].append(content)
+                else:
+                    response["header_fields"][field] = content
 
-        # extract the body (the HTML content), which is the last element in the response
-        response["body"] = data[-1] if len(data) > 1 else None
+            # extract the body (the HTML content), which is the last element in the response
+            response["body"] = data[-1] if len(data) > 1 else None
 
-        # print(int(response["header_fields"]["content-length"]), "\n")
-        # print(len(response["body"]), "\n")
+            # measure the length of the received content
+            received_content_length = len(response["body"]) if response["body"] else -1
 
-        # while int(response["header_fields"]["content-length"]) != len(response["body"]) + 1:
-        #     self.init_connection()
-        #     response = self.socket.recv(100000)
-        #     response["body"] += response.decode()
-
+            # if the length of the content received is not the same as the expected content length,
+            # resend the request
+            if int(response["header_fields"]["content-length"]) != received_content_length + 1:
+                return self.send_request(request)
+        # if any of format-related errors occur, we know the data is malformed/incomplete, so
+        # resend the request
+        except (KeyError, ValueError, IndexError):
+            return self.send_request(request)
 
         # print(response)
 
@@ -252,17 +256,13 @@ class Crawler:
         html_parser.feed(response["body"])
 
         # while the crawler hasn't yet crawled all the pages NOR found all 5 flags, keep crawling
-        while len(link_set) > 0 and len(flags) < 5:
+        while len(link_frontier) > 0 and len(flags) < 5:
             # get the next link from the frontier (uncrawled links)
-            current_link = link_set.pop()
+            current_link = link_frontier.pop()
 
             # send a GET request to obtain the HTML page of the link, store the server reponse,
             # and add the link to the list of already-visited links
             request = self.get(current_link, self.csrf_token, self.session_id)
-            # print("------------------------")
-            # print(request)
-            # print("------------------------")
-            # print("Request: %s" % request)
             response = self.send_request(request)
             visited_links.add(current_link)
 
@@ -271,23 +271,27 @@ class Crawler:
             if response["status_code"] == 200:
                 html_parser.feed(response["body"])
                 print(f"# Links Visited: {len(visited_links)}".ljust(30, " ") +
-                      f"# Links To Visit: {len(link_set)}".ljust(30, " ") +
+                      f"# Links To Visit: {len(link_frontier)}".ljust(30, " ") +
                       f"Visiting: {current_link}")
             # if response is 302 - "Found", redirect to the specified URL (add the specified URL
             # to the frontier (if not already seen))
             elif response["status_code"] == 302:
                 url = response["header_fields"]["location"]
-                if url not in visited_links:
-                    link_set.add(url)
+                if url not in visited_links and url not in link_frontier:
+                    link_frontier.add(url)
             # if response is 403 -- "Forbidden" or 404 -- "Not Found", ignore the current link
             elif response["status_code"] in (403, 404):
                 pass
             # if response is 503 -- "Service Unavailable", retry the link
             elif response["status_code"] == 503:
-                link_set.add(current_link)
+                link_frontier.add(current_link)
+            elif response["status_code"] == 504:
+                self.socket.close()
+                self.init_connection()
+                link_frontier.add(current_link)
             # otherwise, we have an unrecognized status code
             else:
-                raise Exception(f"Unrecognized status code: {response['status_code']}")
+                raise Exception(f"Unrecognized status code: {response} caused by request {request}")
 
         # print all flags found
         for flag in flags:
