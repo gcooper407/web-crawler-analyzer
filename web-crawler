@@ -14,38 +14,6 @@ visited_links = set()
 link_frontier = set()
 flags = []
 
-class MyHTMLParser(HTMLParser):
-    def handle_starttag(self, tag, attrs):
-        """
-        Processes the start tag of an HTML element, saving any new Fakebook links encountered
-
-        :param tag: the string of the opening tag of an HTML element
-        :param attrs: the attributes of the tag, a list of pairs (key, value)
-        :return: None
-        """
-
-        # looks for links (in 'a' tag) and saves those that link to a new fakebook page
-        if tag == 'a':
-            for key, value in attrs:
-                if (key == "href" and value is not None 
-                    and value not in visited_links
-                    and '/fakebook/' in value and "\n" not in value):
-                    link_frontier.add(value)
-
-    def handle_data(self, data):
-        """
-        Handles the data between HTML tags, saving any flags encountered
-
-        :param data: the string data (text/content) inside an HTML tag
-        :return" None
-        """
-
-        # looks for flags and saves any that are found
-        if data.startswith("FLAG:"):
-            flags.append(data)
-            print(f"******************** FOUND {data} ********************")
-
-
 class Crawler:
     def __init__(self, args):
         """
@@ -82,10 +50,10 @@ class Crawler:
 
     def login(self):
         """
-        Logs in to the Fakebook page using the user's specified credentials
+        Logs in via the login page using the user's specified credentials
         (and updates cookies as necessary)
 
-        :return: the response from the server after successfully logging into Fakebook
+        :return: the response from the server after successfully logging in
         """
 
         # initialize connection with the server
@@ -239,15 +207,15 @@ class Crawler:
 
     def run(self):
         """
-        Crawls the Fakebook website and prints out all 5 flags found
+        Crawls the website and prints out all 5 flags found
 
         :return: None
         """
 
-        # logs into Fakebook and redirects to the specified page
+        # logs into the website via the login page and redirects to the specified page
         response = self.login()
         request = (f"GET {response['header_fields']['location']} HTTP/{HTTP_VERSION}\r\n" +
-                   "Host: www.3700.network\r\n" +
+                   f"Host: {DEFAULT_SERVER}\r\n" +
                    f"Cookie: csrftoken={self.csrf_token}; sessionid={self.session_id}\r\n\r\n")
         response = self.send_request(request)
 
@@ -296,6 +264,37 @@ class Crawler:
         # print all flags found
         for flag in flags:
             print(flag.replace("FLAG: ", ""))
+
+class MyHTMLParser(HTMLParser):
+    def handle_starttag(self, tag, attrs):
+        """
+        Processes the start tag of an HTML element, saving any new relevant links encountered
+
+        :param tag: the string of the opening tag of an HTML element
+        :param attrs: the attributes of the tag, a list of pairs (key, value)
+        :return: None
+        """
+
+        # looks for links (in 'a' tag) and saves those that link to a new page
+        if tag == 'a':
+            for key, value in attrs:
+                if (key == "href" and value is not None 
+                    and value not in visited_links
+                    and '/fakebook/' in value and "\n" not in value):
+                    link_frontier.add(value)
+
+    def handle_data(self, data):
+        """
+        Handles the data between HTML tags, saving any flags encountered
+
+        :param data: the string data (text/content) inside an HTML tag
+        :return" None
+        """
+
+        # looks for flags and saves any that are found
+        if data.startswith("FLAG:"):
+            flags.append(data)
+            print(f"******************** FOUND {data} ********************")
 
 
 if __name__ == "__main__":
