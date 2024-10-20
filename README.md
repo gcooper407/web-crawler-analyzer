@@ -18,9 +18,8 @@ of 'payload' to get the login information through, it was unclear exactly how to
 go about that. What proved to be really helpful in this situation was using
 [Postman](https://www.postman.com/) to formulate how the initial few
 requests would go. For instance, I first tested with just sending a request
-to 'https://www.3700.network/fakebook' to see what would get sent back (just
-the general format of the data). From there, I tested with a post request at
-'https://www.3700.network/accounts/login' with the body being a
+to the main page to see what would get sent back (just the general format of the data). 
+From there, I tested with a post request at the login page with the body being a
 'x-www-form-urlencoded' with the username, password, and csrfmiddlewaretoken
 attached. I found how out to include these fields from viewing the 'payload'
 portion of the network tab (inspect element). It became obvious on how to
